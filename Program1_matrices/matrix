@@ -1,0 +1,213 @@
+#!/bin/bash
+#caoyuc
+#cs344_19_fall
+# in stream redirect, if $2 is present, use $2, otherwise stdin
+
+# DO NOT USE IFS in linux
+CFS="${2:-/dev/stdin}"
+#echo "$CFS"
+tmpInput="./.tmp_$$.dat"
+
+#clean up the tempfile
+cleanup () {
+    rm ./.tmp*
+    >&2 echo "Something went wrong! cleaning up and exit"
+    exit 1
+}
+
+trap cleanup 1 2 3 8 9 14 15
+
+# get the col
+getcols() {
+    nc=`head -1 "$1" | wc -w | tr -d " "`
+    echo $nc
+}
+
+#get the row
+getrows() {
+    nr=`cat "$1" | wc -l | cut -f 1 -d " "`
+    echo $nr
+}
+
+#dims
+dims() {
+    nr=`getrows "$tmpInput"`
+    nc=`getcols "$tmpInput"`
+    echo "$nr $nc"
+}
+
+#transpose
+transpose() {
+    nc=`getcols "$tmpInput"`
+    for (( col=1; col<$nc+1; col++ ))
+    do
+        cut -f "$col" "$tmpInput" | paste -s -
+    done
+}
+
+#sum
+sum() {
+    let s=0
+    nr=$(( $1 ))
+    while read num
+    do
+        (( s += num )) 
+    done  # no need to specify input stream, since we use pipe in `mean` to invoke sum, input redirect is automatically taken care of
+    #echo $(( s/nr ))
+    echo $(( (s + (nr/2)*( (s>0)*2-1 )) / nr ))
+}
+
+# helper function to compute per column sum
+loopsums() {
+    let nc=$1
+    let nr=$2
+    for (( col=1; col<$nc+1; col++ ))
+    do
+        cut -f "$col" "$3" | sum $nr
+    done
+}
+
+#mean
+mean() {
+    nc=`getcols "$tmpInput"`
+    nr=`getrows "$tmpInput"`
+    loopsums $nc $nr "$tmpInput" | paste -s -
+}
+
+# point-wise add
+# args:
+# $1 - ncols
+padd() {
+    while read lines
+    do
+        for (( col=1; col<$1+1; col++ ))
+        do
+#	    echo "col=$col, col2=$(( $col+$1 ))"
+#	    echo "lines=$lines"
+	    op1=`echo "$lines" | cut -f "$col"`
+	    op2=`echo "$lines"  | cut -f "$(( $col+$1 ))"`
+#	    echo $lines | cut -f 11
+#	    echo "op1=$op1, op2=$op2"
+            if (( $col != $1 ))
+            then
+                printf "%s\t" $(( $op1+$op2 ))
+            else
+                printf "%s\n" $(( $op1+$op2 ))
+            fi
+        done
+    done
+}
+
+#add
+add() {
+    let nr=$(getrows "$1")
+    let nc=$(getcols "$1")
+    let nrb=$(getrows "$2")
+    let ncb=$(getcols "$2")
+    if (( $nr != $nrb )) || (( $nc != $ncb))
+    then
+	>&2 echo "Mismatched dimensions, exit" 
+	exit 1
+    fi
+    # paste rows in one line
+    paste "$1" "$2" | padd $nc
+}
+
+# row-wise multiply
+# args:
+# $1 - matrix B path
+multiply() {
+    nc=`getcols "$1"`
+    nr=`getrows "$1"`
+    nic=`getcols "$2"`
+    nir=`getrows "$2"`
+    if (( $nc != $nir ))
+    then
+        >&2 echo "Mismatch dimensions, exit"
+        exit 1
+    fi
+    while read lines
+    do
+        for (( col=1; col<$nic+1; col++ ))  # columns of matrix B
+        do
+            res=`((echo "$lines") & (cut -f $col "$2")) | paste -s -`
+            
+            let s=0  # temp sum
+            for (( icol=1; icol<$nc+1; icol++ ))
+            do
+                op1=`echo "$res" | cut -f "$icol"`
+                op2=`echo "$res" | cut -f "$(( $icol + $nc ))"`
+                (( s += $op1*$op2 ))
+            done
+            if (( $col != $nic ))
+            then
+                printf "%s\t" $s
+            else 
+                printf "%s\n" $s
+            fi
+        done 
+    done < "$1"
+}
+
+# main entry point 
+case "$1" in
+    # for dims, tranpose and mean, we cat CFS output to a tmp file, so that both stdin and 
+    dims)
+    	if [ "$#" -ge 3 ]
+	then 
+	    >&2 echo "wrong number of args"
+	    exit 1
+	fi
+	if [ ! -e "$CFS" ]
+	then
+	    >&2 echo "nonexistent file"
+	    exit 1
+    	fi
+        cat "$CFS" > "$tmpInput"
+	dims
+        ;;
+    transpose)
+    	if [ "$#" -lt 2 ]
+	then 
+	    >&2 echo "wrong number of args"
+	    exit 1
+	fi
+    	if [ ! -r "$CFS" ]
+	then 
+	    >&2 echo "wrong number of args"
+	    exit 1
+	fi
+        cat "$CFS" > "$tmpInput"
+	transpose
+        ;;
+    mean)
+    	if [ "$#" -lt 2 ]
+	then 
+	    >&2 echo "wrong number of args"
+	    exit 1
+	fi
+        cat "$CFS" > "$tmpInput"
+	mean
+        ;;
+    add)
+	if [ "$#" -lt 3 ]
+	then
+	    >&2 echo "wrong number of args"
+	    exit 1
+	fi
+        add "$2" "$3"
+        ;;
+    multiply)
+        multiply "$2" "$3"
+        ;;
+    *)
+        >&2 echo "undefined operation"
+        exit 1
+        ;;
+esac
+
+#clean tempfile
+if [ -f "$tmpInput" ]
+then
+    rm "$tmpInput"
+fi
