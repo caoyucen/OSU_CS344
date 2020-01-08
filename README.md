@@ -3,4 +3,4 @@
 
 Grade: A
 
-OTP and matrix have some small bug, I didn't figure out.
+OTP and matrix have some small bugs, I didn't figure out.
